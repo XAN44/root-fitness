@@ -1,0 +1,6 @@
+[submodule "back-end/app"]
+	path = back-end/app
+	url = https://github.com/XAN44/back-end-app.git
+[submodule "front-end/my-app"]
+	path = front-end/my-app
+	url = https://github.com/XAN44/front-end-app.git
