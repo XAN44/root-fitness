@@ -21,7 +21,7 @@ async function execCommand(
   cmd: string[],
   cwd: string,
   showOutput = true
-): Promise<{ success: boolean; output: string; exitCode: number }> {
+): Promise<{ success: boolean; output: string }> {
   try {
     const proc = spawn({
       cmd,
@@ -31,22 +31,15 @@ async function execCommand(
         : ["pipe", "pipe", "pipe"],
     });
 
-    let output = "";
-    if (!showOutput && proc.stdout) {
-      output = await new Response(proc.stdout).text();
-    }
-
     const exitCode = await proc.exited;
     return {
       success: exitCode === 0,
-      output: output.trim(),
-      exitCode,
+      output: "",
     };
   } catch (error) {
     return {
       success: false,
       output: String(error),
-      exitCode: -1,
     };
   }
 }
@@ -88,25 +81,126 @@ async function getCurrentBranch(repoPath: string): Promise<string> {
   }
 }
 
-async function isSubmodule(repoPath: string): Promise<boolean> {
-  try {
-    const gitDir = path.join(repoPath, ".git");
-    const proc = spawn({
-      cmd: ["test", "-f", gitDir],
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    const exitCode = await proc.exited;
-    return exitCode === 0; // .git is a file in submodules, not a directory
-  } catch {
+async function pushSubmodule(
+  name: string,
+  repoPath: string,
+  commitMessage?: string
+): Promise<boolean> {
+  console.log(`\n📤 Pushing ${name} (Submodule)...`);
+
+  // Check for changes
+  const changes = await getGitStatus(repoPath);
+
+  if (changes.length === 0) {
+    console.log(`ℹ️  No changes to push in ${name}`);
+    return true;
+  }
+
+  // Show changed files
+  console.log(`📝 Changed files in ${name}:`);
+  changes.forEach((line) => {
+    console.log(`   ${line}`);
+  });
+
+  // Get commit message if not provided
+  let message = commitMessage;
+  if (!message) {
+    message = await question(
+      `✍️  Commit message for ${name} (or press Enter to skip): `
+    );
+
+    if (!message) {
+      console.log(`⏭️  Skipped ${name}`);
+      return true;
+    }
+  }
+
+  // Git add
+  const addResult = await execCommand(["git", "add", "."], repoPath, false);
+  if (!addResult.success) {
+    console.error(`❌ Failed to stage changes in ${name}`);
     return false;
   }
+
+  // Git commit
+  const commitResult = await execCommand(
+    ["git", "commit", "-m", message],
+    repoPath,
+    false
+  );
+  if (!commitResult.success) {
+    console.error(`❌ Failed to commit in ${name}`);
+    return false;
+  }
+  console.log(`✅ Committed: "${message}"`);
+
+  // Get current branch
+  const branch = await getCurrentBranch(repoPath);
+
+  // Git push
+  const pushResult = await execCommand(
+    ["git", "push", "-u", "origin", branch],
+    repoPath,
+    true
+  );
+  if (!pushResult.success) {
+    console.error(`❌ Failed to push ${name}`);
+    return false;
+  }
+
+  console.log(`✅ Pushed ${name} successfully!`);
+  return true;
+}
+
+async function updateSubmoduleReferences(
+  rootPath: string,
+  commitMessage: string
+): Promise<boolean> {
+  console.log(`\n🔄 Updating submodule references in root...`);
+
+  // Add submodule changes
+  const addResult = await execCommand(
+    ["git", "add", "back-end/app", "front-end/my-app"],
+    rootPath,
+    false
+  );
+
+  if (!addResult.success) {
+    console.log(`ℹ️  No submodule references to update`);
+    return true;
+  }
+
+  // Check if there are changes to commit
+  const changes = await getGitStatus(rootPath);
+  const hasSubmoduleChanges = changes.some(
+    (line) => line.includes("back-end/app") || line.includes("front-end/my-app")
+  );
+
+  if (!hasSubmoduleChanges) {
+    console.log(`ℹ️  Submodule references already up to date`);
+    return true;
+  }
+
+  // Commit submodule updates
+  const commitResult = await execCommand(
+    ["git", "commit", "-m", `Update submodules: ${commitMessage}`],
+    rootPath,
+    false
+  );
+
+  if (!commitResult.success) {
+    console.log(`ℹ️  No new submodule commits to record`);
+    return true;
+  }
+
+  console.log(`✅ Submodule references updated in root`);
+  return true;
 }
 
 async function pushRepository(
   name: string,
   repoPath: string,
-  commitMessage?: string,
-  isSubmodule: boolean = false
+  commitMessage?: string
 ): Promise<boolean> {
   console.log(`\n📤 Pushing ${name}...`);
 
@@ -161,63 +255,16 @@ async function pushRepository(
 
   // Git push
   const pushResult = await execCommand(
-    ["git", "push", "origin", branch],
+    ["git", "push", "-u", "origin", branch],
     repoPath,
     true
   );
-
-  // Check if push was successful or if it's already up-to-date
-  if (pushResult.success || pushResult.exitCode === 0) {
-    console.log(`✅ Pushed ${name} successfully!`);
-    return true;
-  } else {
+  if (!pushResult.success) {
     console.error(`❌ Failed to push ${name}`);
     return false;
   }
-}
 
-async function updateSubmoduleReferences(
-  rootPath: string,
-  message: string
-): Promise<boolean> {
-  console.log("\n🔄 Updating submodule references in root...");
-
-  // Check if there are submodule changes
-  const status = await getGitStatus(rootPath);
-  const hasSubmoduleChanges = status.some(
-    (line) => line.includes("front-end/my-app") || line.includes("back-end/app")
-  );
-
-  if (!hasSubmoduleChanges) {
-    console.log("ℹ️  No submodule reference updates needed");
-    return true;
-  }
-
-  // Stage submodule changes
-  const addResult = await execCommand(
-    ["git", "add", "front-end/my-app", "back-end/app"],
-    rootPath,
-    false
-  );
-
-  if (!addResult.success) {
-    console.error("❌ Failed to stage submodule references");
-    return false;
-  }
-
-  // Commit
-  const commitResult = await execCommand(
-    ["git", "commit", "-m", `Update submodules: ${message}`],
-    rootPath,
-    false
-  );
-
-  if (!commitResult.success) {
-    console.log("ℹ️  No new submodule references to commit");
-    return true;
-  }
-
-  console.log("✅ Submodule references updated");
+  console.log(`✅ Pushed ${name} successfully!`);
   return true;
 }
 
@@ -245,80 +292,80 @@ async function main() {
   switch (choice) {
     case "1":
       // Frontend only
-      success = await pushRepository("Frontend", frontendPath, undefined, true);
+      success = await pushSubmodule("Frontend", frontendPath);
+      if (success) {
+        await updateSubmoduleReferences(rootPath, "Frontend changes");
+        success = await pushRepository(
+          "Root",
+          rootPath,
+          "Update frontend submodule"
+        );
+      }
       break;
 
     case "2":
       // Backend only
-      success = await pushRepository("Backend", backendPath, undefined, true);
-      break;
-
-    case "3":
-      // Root only (without updating submodules)
-      success = await pushRepository("Root", rootPath);
+      success = await pushSubmodule("Backend", backendPath);
       if (success) {
-        const branch = await getCurrentBranch(rootPath);
-        await execCommand(["git", "push", "origin", branch], rootPath, true);
+        await updateSubmoduleReferences(rootPath, "Backend changes");
+        success = await pushRepository(
+          "Root",
+          rootPath,
+          "Update backend submodule"
+        );
       }
       break;
 
+    case "3":
+      // Root only
+      success = await pushRepository("Root", rootPath);
+      break;
+
     case "4":
-      // All repositories - CORRECT ORDER
-      console.log("📦 Pushing all repositories...");
-      console.log("⚠️  Important: Submodules will be pushed BEFORE root\n");
+      // All repositories
+      console.log(
+        "📦 Pushing all repositories (Submodules first, then Root)..."
+      );
 
       const useSharedMessage = await question(
-        "💬 Use same commit message for all? (yes/no) [default: no]: "
+        "\n💬 Use same commit message for all? (yes/no) [default: no]: "
       );
 
       if (useSharedMessage.toLowerCase() === "yes") {
         sharedMessage = await question("✍️  Enter commit message: ");
       }
 
-      // ✨ STEP 1: Push submodules FIRST
-      console.log("\n━━━ STEP 1: Pushing Submodules ━━━");
-
-      const frontendSuccess = await pushRepository(
+      // Push submodules first
+      const frontendSuccess = await pushSubmodule(
         "Frontend",
         frontendPath,
-        sharedMessage,
-        true
+        sharedMessage
       );
-
-      const backendSuccess = await pushRepository(
+      const backendSuccess = await pushSubmodule(
         "Backend",
         backendPath,
-        sharedMessage,
-        true
+        sharedMessage
       );
 
-      // ✨ STEP 2: Update submodule references in root
-      console.log("\n━━━ STEP 2: Updating Root Repository ━━━");
-
-      if (sharedMessage) {
-        await updateSubmoduleReferences(rootPath, sharedMessage);
-      }
-
-      // ✨ STEP 3: Push root with any remaining changes
-      const rootSuccess = await pushRepository("Root", rootPath, sharedMessage);
-
-      // Final push for root
-      if (rootSuccess) {
-        const branch = await getCurrentBranch(rootPath);
-        console.log("\n📤 Final push of root repository...");
-        const finalPush = await execCommand(
-          ["git", "push", "origin", branch],
+      // Update submodule references in root
+      if (frontendSuccess || backendSuccess) {
+        await updateSubmoduleReferences(
           rootPath,
-          true
+          sharedMessage || "Update submodules"
         );
-        success = finalPush.success && frontendSuccess && backendSuccess;
-      } else {
-        success = false;
       }
+
+      // Push root repository
+      const rootSuccess = await pushRepository(
+        "Root",
+        rootPath,
+        sharedMessage || "Update submodule references"
+      );
+
+      success = frontendSuccess && backendSuccess && rootSuccess;
 
       if (success) {
         console.log("\n✅ All repositories pushed successfully!");
-        console.log("💡 Submodules are now correctly referenced in root");
       } else {
         console.log("\n⚠️  Some repositories failed to push");
       }
@@ -340,23 +387,40 @@ async function main() {
         sharedMessage = await question("✍️  Enter commit message: ");
       }
 
-      // Push submodules first
+      let hasSubmoduleChanges = false;
+
       if (pushFrontend.toLowerCase() === "yes") {
-        await pushRepository("Frontend", frontendPath, sharedMessage, true);
+        const result = await pushSubmodule(
+          "Frontend",
+          frontendPath,
+          sharedMessage
+        );
+        hasSubmoduleChanges = hasSubmoduleChanges || result;
       }
 
       if (pushBackend.toLowerCase() === "yes") {
-        await pushRepository("Backend", backendPath, sharedMessage, true);
+        const result = await pushSubmodule(
+          "Backend",
+          backendPath,
+          sharedMessage
+        );
+        hasSubmoduleChanges = hasSubmoduleChanges || result;
       }
 
-      // Update and push root last
+      // Update submodule references if any submodule was pushed
+      if (hasSubmoduleChanges) {
+        await updateSubmoduleReferences(
+          rootPath,
+          sharedMessage || "Update submodules"
+        );
+      }
+
       if (pushRoot.toLowerCase() === "yes") {
-        if (sharedMessage) {
-          await updateSubmoduleReferences(rootPath, sharedMessage);
-        }
-        await pushRepository("Root", rootPath, sharedMessage);
-        const branch = await getCurrentBranch(rootPath);
-        await execCommand(["git", "push", "origin", branch], rootPath, true);
+        await pushRepository(
+          "Root",
+          rootPath,
+          sharedMessage || "Update submodule references"
+        );
       }
 
       console.log("\n✅ Selected repositories processed!");
