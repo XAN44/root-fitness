@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "concurrently -n BE,FE -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "cd back-end/app && bun run dev",
-    "dev:frontend": "cd front-end/my-app && npm run dev"
+    "dev:frontend": "cd front-end/my-app && npm run dev",
+    "push": "bun script/push.ts"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"
