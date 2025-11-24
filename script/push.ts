@@ -181,6 +181,14 @@ async function updateSubmoduleReferences(
     return false;
   }
 
+  // Show what's being updated
+  console.log(`📝 Updating submodule pointers:`);
+  changes.forEach((line) => {
+    if (line.includes("back-end/app") || line.includes("front-end/my-app")) {
+      console.log(`   ${line}`);
+    }
+  });
+
   // Commit submodule updates
   const commitResult = await execCommand(
     ["git", "commit", "-m", `Update submodules: ${commitMessage}`],
@@ -193,7 +201,25 @@ async function updateSubmoduleReferences(
     return false;
   }
 
-  console.log(`✅ Submodule references updated in root`);
+  console.log(`✅ Submodule references committed in root`);
+
+  // Get current branch
+  const branch = await getCurrentBranch(rootPath);
+
+  // Push the submodule reference updates
+  console.log(`📤 Pushing submodule reference updates...`);
+  const pushResult = await execCommand(
+    ["git", "push", "-u", "origin", branch],
+    rootPath,
+    true
+  );
+
+  if (!pushResult.success) {
+    console.error(`❌ Failed to push submodule references`);
+    return false;
+  }
+
+  console.log(`✅ Submodule references pushed to remote`);
   return true;
 }
 
@@ -295,19 +321,8 @@ async function main() {
       // Frontend only
       const frontendPushed = await pushSubmodule("Frontend", frontendPath);
       if (frontendPushed) {
-        // Update submodule reference in root
-        const updated = await updateSubmoduleReferences(
-          rootPath,
-          "Frontend changes"
-        );
-        if (updated) {
-          // Push root to update the submodule pointer
-          success = await pushRepository(
-            "Root",
-            rootPath,
-            "Update frontend submodule reference"
-          );
-        }
+        // Update and push submodule reference in root
+        success = await updateSubmoduleReferences(rootPath, "Frontend changes");
       }
       break;
 
@@ -315,19 +330,8 @@ async function main() {
       // Backend only
       const backendPushed = await pushSubmodule("Backend", backendPath);
       if (backendPushed) {
-        // Update submodule reference in root
-        const updated = await updateSubmoduleReferences(
-          rootPath,
-          "Backend changes"
-        );
-        if (updated) {
-          // Push root to update the submodule pointer
-          success = await pushRepository(
-            "Root",
-            rootPath,
-            "Update backend submodule reference"
-          );
-        }
+        // Update and push submodule reference in root
+        success = await updateSubmoduleReferences(rootPath, "Backend changes");
       }
       break;
 
@@ -362,22 +366,16 @@ async function main() {
         sharedMessage
       );
 
-      // Update submodule references in root if any submodule was pushed
-      let rootNeedsUpdate = false;
+      // Update and push submodule references in root if any submodule was pushed
       if (frontendSuccess || backendSuccess) {
-        rootNeedsUpdate = await updateSubmoduleReferences(
+        await updateSubmoduleReferences(
           rootPath,
           sharedMessage || "Update submodules"
         );
       }
 
-      // Push root repository (either has its own changes or submodule updates)
-      const rootSuccess = await pushRepository(
-        "Root",
-        rootPath,
-        sharedMessage ||
-          (rootNeedsUpdate ? "Update submodule references" : undefined)
-      );
+      // Push root repository if it has its own changes (not submodule changes)
+      const rootSuccess = await pushRepository("Root", rootPath, sharedMessage);
 
       success = rootSuccess;
 
@@ -424,33 +422,16 @@ async function main() {
         hasSubmoduleChanges = hasSubmoduleChanges || result;
       }
 
-      // Update submodule references if any submodule was pushed
-      let needsRootUpdate = false;
+      // Update and push submodule references if any submodule was pushed
       if (hasSubmoduleChanges) {
-        needsRootUpdate = await updateSubmoduleReferences(
+        await updateSubmoduleReferences(
           rootPath,
           sharedMessage || "Update submodules"
         );
       }
 
       if (pushRoot.toLowerCase() === "yes") {
-        await pushRepository(
-          "Root",
-          rootPath,
-          sharedMessage ||
-            (needsRootUpdate ? "Update submodule references" : undefined)
-        );
-      } else if (needsRootUpdate) {
-        // If user didn't choose to push root but we have submodule updates, ask
-        console.log(
-          "\n⚠️  Submodule references were updated but root wasn't pushed."
-        );
-        const shouldPushRoot = await question(
-          "Push root now to sync submodules? (yes/no): "
-        );
-        if (shouldPushRoot.toLowerCase() === "yes") {
-          await pushRepository("Root", rootPath, "Update submodule references");
-        }
+        await pushRepository("Root", rootPath, sharedMessage);
       }
 
       console.log("\n✅ Selected repositories processed!");
